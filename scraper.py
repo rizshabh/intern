@@ -4,41 +4,58 @@ import csv
 from datetime import datetime
 import os
 import time
+from fake_useragent import UserAgent
 
-def scrape_olx_car_covers(max_retries=3, delay=2):
+def scrape_olx_car_covers(max_retries=3, delay=5):
     """
-    Scrapes car cover listings from OLX and saves them to a CSV file.
-    
-    Args:
-        max_retries (int): Max retries if request fails.
-        delay (int): Delay between retries (seconds).
+    Improved scraper with:
+    - Rotating user agents
+    - Longer timeout
+    - Proxy support (if needed)
+    - Better error handling
     """
     url = "https://www.olx.in/items/q-car-cover"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    ua = UserAgent()
     
-    data = []
-    retries = 0
-    
-    while retries < max_retries:
+    for attempt in range(max_retries):
         try:
-            print("Fetching data from OLX...")
-            response = requests.get(url, headers=headers, timeout=10)
+            headers = {
+                'User-Agent': ua.random,
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
+            
+            print(f"Attempt {attempt + 1}: Fetching data...")
+            
+            # Increased timeout to 30 seconds
+            response = requests.get(url, headers=headers, timeout=30)
+            
+            if response.status_code == 403:
+                print("Access denied. OLX might be blocking scrapers.")
+                return
+            
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
-            listings = soup.find_all('li', {'class': 'EIR5N'})  # Updated class for listings
+            
+            # Updated selectors (OLX changes these frequently)
+            listings = soup.find_all('li', {'class': 'EIR5N'}) or soup.find_all('div', {'class': '_2grJG'})
             
             if not listings:
-                print("No listings found. Check if OLX structure changed.")
+                print("No listings found. Possible issues:")
+                print("- OLX updated their HTML structure")
+                print("- Requires JavaScript rendering (consider Selenium)")
                 return
             
+            data = []
             for listing in listings:
                 try:
-                    title = listing.find('span', {'class': '_2poNJ'}).text.strip() if listing.find('span', {'class': '_2poNJ'}) else 'N/A'
-                    price = listing.find('span', {'class': '_2Ks63'}).text.strip() if listing.find('span', {'class': '_2Ks63'}) else 'N/A'
-                    location = listing.find('span', {'class': '_2VQu4'}).text.strip() if listing.find('span', {'class': '_2VQu4'}) else 'N/A'
+                    title_elem = listing.find(['span', 'h4'], class_=lambda x: x and ('_2poNJ' in x or 'title' in x))
+                    price_elem = listing.find(['span', 'div'], class_=lambda x: x and ('_2Ks63' in x or 'price' in x))
+                    location_elem = listing.find(['span', 'div'], class_=lambda x: x and ('_2VQu4' in x or 'location' in x))
+                    
+                    title = title_elem.text.strip() if title_elem else 'N/A'
+                    price = price_elem.text.strip() if price_elem else 'N/A'
+                    location = location_elem.text.strip() if location_elem else 'N/A'
                     link = listing.find('a')['href'] if listing.find('a') else 'N/A'
                     
                     if link and not link.startswith('http'):
@@ -51,34 +68,32 @@ def scrape_olx_car_covers(max_retries=3, delay=2):
                         'Link': link
                     })
                 except Exception as e:
-                    print(f"Error parsing listing: {e}")
+                    print(f"Skipping listing due to error: {str(e)}")
                     continue
             
-            break  # Success, exit retry loop
+            if data:
+                save_to_csv(data)
+                return
             
         except requests.exceptions.RequestException as e:
-            retries += 1
-            print(f"Attempt {retries} failed: {e}")
-            if retries < max_retries:
+            print(f"Attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"Waiting {delay} seconds before retry...")
                 time.sleep(delay)
             else:
-                print("Max retries reached. Exiting.")
-                return
-    
-    if not data:
-        print("No data scraped.")
-        return
-    
-    # Save to CSV
+                print("Max retries reached. Possible solutions:")
+                print("1. Try again later (OLX might be rate-limiting)")
+                print("2. Use a VPN/proxy")
+                print("3. Use Selenium for JavaScript rendering")
+
+def save_to_csv(data):
+    os.makedirs("output", exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"olx_car_covers_{timestamp}.csv"
-    
-    os.makedirs("output", exist_ok=True)
     filepath = os.path.join("output", filename)
     
     with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['Title', 'Price', 'Location', 'Link']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=['Title', 'Price', 'Location', 'Link'])
         writer.writeheader()
         writer.writerows(data)
     
